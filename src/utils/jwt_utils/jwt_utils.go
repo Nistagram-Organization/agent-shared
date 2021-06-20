@@ -4,8 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	jwtmiddleware "github.com/auth0/go-jwt-middleware"
+	"github.com/Nistagram-Organization/agent-shared/src/utils/rest_error"
 	"github.com/form3tech-oss/jwt-go"
+	"github.com/gin-gonic/gin"
 	"net/http"
 	"os"
 	"strings"
@@ -29,35 +30,24 @@ type CustomClaims struct {
 	jwt.StandardClaims
 }
 
-func GetJwtMiddleware() *jwtmiddleware.JWTMiddleware {
-	return jwtmiddleware.New(jwtmiddleware.Options{
-		ValidationKeyGetter: func(token *jwt.Token) (interface{}, error) {
-			// Verify 'aud' claim
-			aud := os.Getenv("aud")
-			checkAud := token.Claims.(jwt.MapClaims).VerifyAudience(aud, false)
-			if !checkAud {
-				return token, errors.New("invalid audience")
-			}
-			// Verify 'iss' claim
-			iss := fmt.Sprintf("https://%s/", os.Getenv("domain"))
-			checkIss := token.Claims.(jwt.MapClaims).VerifyIssuer(iss, false)
-			if !checkIss {
-				return token, errors.New("invalid issuer")
-			}
+func JwtMiddleware(scope string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authHeaderParts := strings.Split(c.GetHeader("Authorization"), " ")
+		token := authHeaderParts[1]
 
-			cert, err := getPemCert(token)
-			if err != nil {
-				panic(err.Error())
-			}
+		hasScope := checkScope(scope, token)
 
-			result, _ := jwt.ParseRSAPublicKeyFromPEM([]byte(cert))
-			return result, nil
-		},
-		SigningMethod: jwt.SigningMethodRS256,
-	})
+		if !hasScope {
+			err := rest_error.NewUnauthorizedError("insufficient scope")
+			c.JSON(err.Status(), err)
+			return
+		}
+
+		c.Next()
+	}
 }
 
-func CheckScope(scope string, tokenString string) bool {
+func checkScope(scope string, tokenString string) bool {
 	token, _ := jwt.ParseWithClaims(tokenString, &CustomClaims{}, func(token *jwt.Token) (interface{}, error) {
 		cert, err := getPemCert(token)
 		if err != nil {
