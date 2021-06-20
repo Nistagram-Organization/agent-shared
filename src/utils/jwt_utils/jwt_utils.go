@@ -39,7 +39,7 @@ func JwtMiddleware(scope string) gin.HandlerFunc {
 
 		if !hasScope {
 			err := rest_error.NewUnauthorizedError("insufficient scope")
-			c.JSON(err.Status(), err)
+			c.AbortWithStatusJSON(err.Status(), err)
 			return
 		}
 
