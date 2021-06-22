@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"github.com/Nistagram-Organization/agent-shared/src/utils/rest_error"
+	jwtmiddleware "github.com/auth0/go-jwt-middleware"
 	"github.com/form3tech-oss/jwt-go"
 	"github.com/gin-gonic/gin"
 	"net/http"
-	"os"
 	"strings"
 )
 
@@ -28,23 +28,6 @@ type JSONWebKeys struct {
 type CustomClaims struct {
 	Scope string `json:"scope"`
 	jwt.StandardClaims
-}
-
-func JwtMiddleware(scope string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		authHeaderParts := strings.Split(c.GetHeader("Authorization"), " ")
-		token := authHeaderParts[1]
-
-		hasScope := checkScope(scope, token)
-
-		if !hasScope {
-			err := rest_error.NewUnauthorizedError("insufficient scope")
-			c.AbortWithStatusJSON(err.Status(), err)
-			return
-		}
-
-		c.Next()
-	}
 }
 
 func checkScope(scope string, tokenString string) bool {
@@ -72,10 +55,73 @@ func checkScope(scope string, tokenString string) bool {
 	return hasScope
 }
 
+func CheckScope(scope string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authHeaderParts := strings.Split(c.GetHeader("Authorization"), " ")
+		token := authHeaderParts[1]
+
+		hasScope := checkScope(scope, token)
+
+		if !hasScope {
+			err := rest_error.NewUnauthorizedError("insufficient scope")
+			c.AbortWithError(err.Status(), err)
+			return
+		}
+		c.Next()
+	}
+}
+
+func GetJwtMiddleware() gin.HandlerFunc {
+	jwtMiddleware := jwtmiddleware.New(jwtmiddleware.Options{
+		ValidationKeyGetter: func(token *jwt.Token) (interface{}, error) {
+			// Verify 'aud' claim
+			aud := "http://nistagram-agent"
+			fmt.Sprintln("Checked audience")
+			checkAud := token.Claims.(jwt.MapClaims).VerifyAudience(aud, false)
+			if !checkAud {
+				return token, errors.New("invalid audience")
+			}
+			// Verify 'iss' claim
+			iss := "https://dev-6w-2hyw1.eu.auth0.com/"
+			fmt.Sprintln("Checked issuer")
+			checkIss := token.Claims.(jwt.MapClaims).VerifyIssuer(iss, false)
+			if !checkIss {
+				return token, errors.New("invalid issuer")
+			}
+
+			cert, err := getPemCert(token)
+			if err != nil {
+				panic(err.Error())
+			}
+
+			result, _ := jwt.ParseRSAPublicKeyFromPEM([]byte(cert))
+			return result, nil
+		},
+		SigningMethod: jwt.SigningMethodRS256,
+	})
+
+	return asGin(jwtMiddleware.Handler)
+}
+
+func asGin(middleware func(next http.Handler) http.Handler) gin.HandlerFunc {
+	return func(gctx *gin.Context) {
+		var skip = true
+		var handler http.HandlerFunc = func(http.ResponseWriter, *http.Request) {
+			skip = false
+		}
+		middleware(handler).ServeHTTP(gctx.Writer, gctx.Request)
+		switch {
+		case skip:
+			gctx.Abort()
+		default:
+			gctx.Next()
+		}
+	}
+}
+
 func getPemCert(token *jwt.Token) (string, error) {
 	cert := ""
-	domain := os.Getenv("domain")
-	resp, err := http.Get(fmt.Sprintf("https://%s/.well-known/jwks.json", domain))
+	resp, err := http.Get("https://dev-6w-2hyw1.eu.auth0.com/.well-known/jwks.json")
 
 	if err != nil {
 		return cert, err
