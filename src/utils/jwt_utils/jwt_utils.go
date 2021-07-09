@@ -26,11 +26,20 @@ type JSONWebKeys struct {
 }
 
 type CustomClaims struct {
-	Scope string `json:"scope"`
+	Permissions []string `json:"permissions"`
 	jwt.StandardClaims
 }
 
-func checkScope(scope string, tokenString string) bool {
+func checkForMatch(providedPermission string, requiredPermissions []string) bool {
+	for _, requiredPermission := range requiredPermissions {
+		if providedPermission == requiredPermission {
+			return true
+		}
+	}
+	return false
+}
+
+func checkPermissions(permission string, tokenString string) bool {
 	token, _ := jwt.ParseWithClaims(tokenString, &CustomClaims{}, func(token *jwt.Token) (interface{}, error) {
 		cert, err := getPemCert(token)
 		if err != nil {
@@ -42,28 +51,23 @@ func checkScope(scope string, tokenString string) bool {
 
 	claims, ok := token.Claims.(*CustomClaims)
 
-	hasScope := false
+	hasPermission := false
 	if ok && token.Valid {
-		result := strings.Split(claims.Scope, " ")
-		for i := range result {
-			if result[i] == scope {
-				hasScope = true
-			}
-		}
+		hasPermission = checkForMatch(permission, claims.Permissions)
 	}
 
-	return hasScope
+	return hasPermission
 }
 
-func CheckScope(scope string) gin.HandlerFunc {
+func CheckScope(permission string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeaderParts := strings.Split(c.GetHeader("Authorization"), " ")
 		token := authHeaderParts[1]
 
-		hasScope := checkScope(scope, token)
+		hasScope := checkPermissions(permission, token)
 
 		if !hasScope {
-			err := rest_error.NewUnauthorizedError("insufficient scope")
+			err := rest_error.NewUnauthorizedError("insufficient permission")
 			c.AbortWithError(err.Status(), err)
 			return
 		}
